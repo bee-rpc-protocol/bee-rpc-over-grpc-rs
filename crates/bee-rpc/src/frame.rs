@@ -452,10 +452,12 @@ impl Parser {
         });
         match held_content {
             Some(content) => {
-                self.add_content(&content);
+                // Ask first: hashing a large block takes time, and every
+                // Buffer that the peer sends meanwhile is bandwidth lost.
                 if let Some(control) = &self.control {
                     control.request_skip(&id);
                 }
+                self.add_content(&content);
             }
             None => {
                 if let Some(chunk) = chunk {

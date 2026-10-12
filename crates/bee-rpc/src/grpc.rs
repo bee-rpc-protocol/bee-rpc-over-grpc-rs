@@ -91,6 +91,34 @@ async fn run(
     }
 }
 
+/// From this many bytes of chunk, or at a block marker, parsing hashes enough data to
+/// stall the runtime thread. Such a Buffer is parsed on a blocking thread, so that
+/// the request direction (skip requests, flow control) keeps running.
+const OFFLOAD_BYTES: usize = 64 * 1024;
+
+/// [`Parser::push`], off the async threads when the Buffer is heavy. Gives the
+/// parser back.
+async fn push(
+    mut parser: Parser,
+    buffer: Buffer,
+) -> Result<(Parser, Result<Vec<Part>, Error>), Error> {
+    let heavy = buffer.block.is_some()
+        || buffer
+            .chunk
+            .as_ref()
+            .is_some_and(|c| c.len() >= OFFLOAD_BYTES);
+    if !heavy {
+        let parsed = parser.push(buffer);
+        return Ok((parser, parsed));
+    }
+    tokio::task::spawn_blocking(move || {
+        let parsed = parser.push(buffer);
+        (parser, parsed)
+    })
+    .await
+    .map_err(transport)
+}
+
 /// The request direction task. It stops when the call ends (dropped).
 struct SendTask {
     done: Arc<AtomicBool>,
@@ -145,7 +173,9 @@ async fn exchange(
 
     let mut out = Vec::new();
     while let Some(buffer) = response.message().await.map_err(transport)? {
-        out.extend(parser.push(buffer)?);
+        let (back, parsed) = push(parser, buffer).await?;
+        parser = back;
+        out.extend(parsed?);
     }
     out.extend(parser.finish()?);
     Ok(out)
