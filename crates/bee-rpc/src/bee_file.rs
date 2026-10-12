@@ -18,7 +18,14 @@ const LEN_SIZE: usize = 4;
 /// reader allocate memory that the file does not hold.
 const MAX_RESERVE: usize = 1024 * 1024;
 
-/// Write `buffers` as .bee records.
+/// Write `buffers` as .bee records, then flush `writer`.
+///
+/// Each record is two `write_all` calls (the length, then the Buffer), so pass a
+/// buffered writer (`BufWriter`) if `writer` is a file or a socket.
+///
+/// A Buffer of more than `u32::MAX` bytes does not fit the length prefix. It is
+/// [`Error::Io`] with [`ErrorKind::InvalidInput`], and nothing of that Buffer is
+/// written.
 pub fn write_bee<W: Write>(
     writer: &mut W,
     buffers: impl IntoIterator<Item = Buffer>,
@@ -37,6 +44,7 @@ pub fn write_bee<W: Write>(
         writer.write_all(&len.to_be_bytes())?;
         writer.write_all(&record)?;
     }
+    writer.flush()?;
     Ok(())
 }
 
