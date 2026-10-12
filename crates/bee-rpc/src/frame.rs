@@ -44,12 +44,13 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::buffer::buffer::Head;
+use crate::buffer::buffer::{Block, Head};
 use crate::buffer::Buffer;
-use crate::hash::HashAlgorithm;
+use crate::hash::{HashAlgorithm, Hasher};
+use crate::pointer::block_id_from_pointer;
 use crate::signal::Signal;
 use crate::skip::StreamControl;
-use crate::{Error, CHUNK_SIZE};
+use crate::{Error, CHUNK_SIZE, MAX_BLOCK_NESTING};
 
 /// One message: its index and its bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -221,54 +222,248 @@ pub struct BlockStart {
     pub previous_lengths_position: Vec<u64>,
 }
 
+/// A block that is open: its id, and a hasher over its expansion.
+struct OpenBlock {
+    id: Vec<u8>,
+    hasher: Hasher,
+    /// The content comes from the store; the wire bytes up to its end marker
+    /// are dropped, and the content is not checked again.
+    held: bool,
+}
+
+/// The message that is being read.
+struct OpenMessage {
+    index: i32,
+    data: Vec<u8>,
+}
+
 /// A push parser: give it Buffers, get complete messages.
 ///
 /// It does no I/O, so the same parser serves a gRPC stream, a .bee file or a test.
 pub struct Parser {
-    // Add the state you need.
-    _private: (),
+    options: ParseOptions,
+    store: Option<Arc<dyn BlockStore>>,
+    signal: Option<Signal>,
+    control: Option<StreamControl>,
+    message: Option<OpenMessage>,
+    blocks: Vec<OpenBlock>,
+    starts: Vec<BlockStart>,
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// True if `buffer` has nothing that a message or a block needs.
+fn is_inert(buffer: &Buffer) -> bool {
+    buffer.head.is_none()
+        && buffer.block.is_none()
+        && buffer.separator != Some(true)
+        && buffer.signal != Some(true)
+        && buffer.chunk.as_ref().is_none_or(|c| c.is_empty())
 }
 
 impl Parser {
     /// A new parser.
     pub fn new(options: ParseOptions) -> Self {
-        let _ = options;
-        todo!("step 6: parser")
+        Parser {
+            options,
+            store: None,
+            signal: None,
+            control: None,
+            message: None,
+            blocks: Vec::new(),
+            starts: Vec::new(),
+        }
     }
 
     /// Use `store` for blocks that the receiver already holds.
-    pub fn with_store(self, store: Arc<dyn BlockStore>) -> Self {
-        let _ = store;
-        todo!("step 6: parser")
+    pub fn with_store(mut self, store: Arc<dyn BlockStore>) -> Self {
+        self.store = Some(store);
+        self
     }
 
     /// Toggle `signal` when a Buffer has `signal: true`.
-    pub fn with_signal(self, signal: Signal) -> Self {
-        let _ = signal;
-        todo!("step 6: parser")
+    pub fn with_signal(mut self, signal: Signal) -> Self {
+        self.signal = Some(signal);
+        self
     }
 
     /// Record skip requests from the peer in `control`, and ask the peer to skip
     /// blocks that the store holds.
-    pub fn with_control(self, control: StreamControl) -> Self {
-        let _ = control;
-        todo!("step 6: parser")
+    pub fn with_control(mut self, control: StreamControl) -> Self {
+        self.control = Some(control);
+        self
     }
 
     /// Add one Buffer. Returns the messages that it completes (zero or more).
-    pub fn push(&mut self, buffer: Buffer) -> Result<Vec<Part>, Error> {
-        let _ = buffer;
-        todo!("step 6: parser")
+    pub fn push(&mut self, mut buffer: Buffer) -> Result<Vec<Part>, Error> {
+        let mut out = Vec::new();
+
+        // The skip field is never message data (D5).
+        if buffer.skip.is_some() {
+            if let Some(control) = &self.control {
+                control.observe(&buffer);
+            }
+            buffer.skip = None;
+            if is_inert(&buffer) {
+                return Ok(out);
+            }
+        }
+        if buffer.signal == Some(true) {
+            if let Some(signal) = &self.signal {
+                signal.change();
+            }
+        }
+
+        if self.blocks.last().is_some_and(|b| b.held) {
+            // Inside a block that the store holds: only its end marker matters.
+            let closes = match (&buffer.block, self.blocks.last()) {
+                (Some(block), Some(top)) => {
+                    block_id_from_pointer(block, None, self.options.algorithm).as_deref()
+                        == Some(top.id.as_slice())
+                }
+                _ => false,
+            };
+            if !closes {
+                return Ok(out);
+            }
+            self.blocks.pop();
+            buffer.chunk = None;
+        } else {
+            if self.message.is_none() {
+                if let Some(head) = &buffer.head {
+                    self.start_message(head.index)?;
+                } else if buffer.chunk.is_some()
+                    || buffer.block.is_some()
+                    || buffer.separator == Some(true)
+                {
+                    self.start_message(self.options.headless_index)?;
+                }
+            }
+            if self.message.is_none() {
+                return Ok(out);
+            }
+            if let Some(block) = buffer.block.take() {
+                self.marker(&block, buffer.chunk.take())?;
+            }
+            if let Some(chunk) = buffer.chunk.take() {
+                self.add_content(&chunk);
+            }
+        }
+
+        if buffer.separator == Some(true) {
+            if let Some(last) = self.blocks.last() {
+                return Err(Error::UnclosedBlock(to_hex(&last.id)));
+            }
+            out.extend(self.message.take().map(|m| Part {
+                index: m.index,
+                data: m.data,
+            }));
+        }
+        Ok(out)
     }
 
     /// End of the stream. Returns the message that is still open, if any.
     pub fn finish(&mut self) -> Result<Vec<Part>, Error> {
-        todo!("step 6: parser")
+        if let Some(last) = self.blocks.last() {
+            return Err(Error::UnclosedBlock(to_hex(&last.id)));
+        }
+        Ok(self
+            .message
+            .take()
+            .map(|m| Part {
+                index: m.index,
+                data: m.data,
+            })
+            .into_iter()
+            .collect())
     }
 
     /// Every block start marker seen so far, in stream order.
     pub fn block_starts(&self) -> &[BlockStart] {
-        todo!("step 6: parser")
+        &self.starts
+    }
+
+    fn start_message(&mut self, index: i32) -> Result<(), Error> {
+        let accepted = index == 0
+            || self
+                .options
+                .accepted
+                .as_ref()
+                .is_none_or(|set| set.contains(&index));
+        if !accepted {
+            return Err(Error::UnknownIndex(index));
+        }
+        self.message = Some(OpenMessage {
+            index,
+            data: Vec::new(),
+        });
+        Ok(())
+    }
+
+    /// Bytes of the expansion: to the message and to every open block.
+    fn add_content(&mut self, data: &[u8]) {
+        if let Some(message) = &mut self.message {
+            message.data.extend_from_slice(data);
+        }
+        for block in &mut self.blocks {
+            block.hasher.update(data);
+        }
+    }
+
+    /// A block marker: it closes the innermost open block, or opens a block.
+    /// `chunk` is the chunk of the same Buffer.
+    fn marker(&mut self, block: &Block, chunk: Option<Vec<u8>>) -> Result<(), Error> {
+        let algorithm = self.options.algorithm;
+        let id = block_id_from_pointer(block, None, algorithm).ok_or(Error::UnresolvableBlock)?;
+        if self.blocks.iter().any(|b| b.id == id) {
+            if self.blocks.last().map(|b| &b.id) != Some(&id) {
+                return Err(Error::IntersectingBlocks);
+            }
+            if let Some(chunk) = chunk {
+                self.add_content(&chunk);
+            }
+            if let Some(closed) = self.blocks.pop() {
+                let actual = closed.hasher.finalize();
+                if actual != id {
+                    return Err(Error::BlockIdMismatch {
+                        id: to_hex(&id),
+                        actual: to_hex(&actual),
+                    });
+                }
+            }
+            return Ok(());
+        }
+        if self.blocks.len() >= MAX_BLOCK_NESTING {
+            return Err(Error::NestingTooDeep(MAX_BLOCK_NESTING));
+        }
+        self.starts.push(BlockStart {
+            id: id.clone(),
+            depth: self.blocks.len() + 1,
+            previous_lengths_position: block.previous_lengths_position.clone(),
+        });
+        let held_content = self.store.as_ref().and_then(|s| s.get(&id));
+        let held = held_content.is_some();
+        self.blocks.push(OpenBlock {
+            id: id.clone(),
+            hasher: algorithm.hasher(),
+            held,
+        });
+        match held_content {
+            Some(content) => {
+                self.add_content(&content);
+                if let Some(control) = &self.control {
+                    control.request_skip(&id);
+                }
+            }
+            None => {
+                if let Some(chunk) = chunk {
+                    self.add_content(&chunk);
+                }
+            }
+        }
+        Ok(())
     }
 }
 

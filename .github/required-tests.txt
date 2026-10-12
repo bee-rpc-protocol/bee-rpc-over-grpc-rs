@@ -13,3 +13,5 @@ bee_file
 signal
 serialize
 skip
+parse
+parse_errors
