@@ -173,16 +173,7 @@
      ]
     },
     {
-     "depth": 3,
-     "id": "015e494b2ba76a5c64faca135eec81f1372ff5efbecf2eb2409a12d28f1556a5",
-     "previous_lengths_position": [
-      1,
-      4,
-      7
-     ]
-    },
-    {
-     "depth": 4,
+     "depth": 1,
      "id": "a44e30f97b898fef29d45f4c9be45cc88e9b67cb5996334c14331fb3c9768415",
      "previous_lengths_position": [
       1,
@@ -744,7 +735,7 @@
    "name": "nested_child",
    "note": "Skip the inner leaf block only.",
    "output": "skip_nested_child.bee",
-   "output_buffers": 5,
+   "output_buffers": 12,
    "request_after": 0,
    "skip_ids": [
     "b1d8e2096f2722ced4b2a7a0687035acf8661b910eaec79d7837f06d311b04ff"
@@ -755,7 +746,7 @@
    "name": "nested_parent",
    "note": "Skip the parent: its children markers are dropped too, its end marker is kept.",
    "output": "skip_nested_parent.bee",
-   "output_buffers": 3,
+   "output_buffers": 9,
    "request_after": 0,
    "skip_ids": [
     "015e494b2ba76a5c64faca135eec81f1372ff5efbecf2eb2409a12d28f1556a5"

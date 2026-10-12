@@ -22,6 +22,7 @@ Output:
 The script is deterministic: two runs give the same bytes. CI runs it and
 fails on a diff.
 """
+import copy
 import hashlib
 import json
 import os
@@ -123,6 +124,9 @@ def python_parse(buffers, indices: dict, message_mode: bool = True, skip_wbp: bo
     `skip_wbp=True` is for synthetic streams that are not a protobuf object: the
     wbp file is a storage artefact, not a wire one, and it cannot be built for them.
     """
+    # The reference mutates its input (stop_generator clears the end marker of a
+    # nested block). Parse a copy: the caller writes and measures the originals.
+    buffers = copy.deepcopy(list(buffers))
     heads = []
 
     def tap(it):
