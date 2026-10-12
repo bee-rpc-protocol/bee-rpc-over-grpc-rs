@@ -44,11 +44,12 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use crate::buffer::buffer::Head;
 use crate::buffer::Buffer;
 use crate::hash::HashAlgorithm;
 use crate::signal::Signal;
 use crate::skip::StreamControl;
-use crate::Error;
+use crate::{Error, CHUNK_SIZE};
 
 /// One message: its index and its bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,8 +72,17 @@ impl Part {
 
 /// The Buffers of one part, in order. See the sender rules in the module docs.
 pub fn serialize_part(part: &Part) -> PartBuffers<'_> {
-    let _ = part;
-    todo!("step 4: serializer")
+    let stage = if part.data.len() < CHUNK_SIZE {
+        Stage::Short
+    } else {
+        Stage::Head
+    };
+    PartBuffers {
+        index: part.index,
+        data: &part.data,
+        chunks: part.data.chunks(CHUNK_SIZE),
+        stage,
+    }
 }
 
 /// The Buffers of all parts, one after the other.
@@ -83,17 +93,85 @@ pub fn serialize_parts<'a>(parts: impl IntoIterator<Item = &'a Part>) -> Vec<Buf
 /// Iterator over the Buffers of one part. Do not copy the whole part at once
 /// for a large part: make each chunk when `next` is called.
 pub struct PartBuffers<'a> {
-    // Add the state you need.
-    _part: &'a Part,
+    index: i32,
+    data: &'a [u8],
+    chunks: std::slice::Chunks<'a, u8>,
+    stage: Stage,
+}
+
+/// Where a [`PartBuffers`] is in the sender rules.
+enum Stage {
+    /// The one-Buffer form: chunk, head and separator.
+    Short,
+    /// The long form, before its head.
+    Head,
+    /// The long form, after its head: the chunks, then the separator.
+    Chunks,
+    /// All Buffers are out.
+    Done,
+}
+
+impl PartBuffers<'_> {
+    fn head(&self) -> Option<Head> {
+        Some(Head {
+            index: self.index,
+            partitions: Vec::new(),
+        })
+    }
 }
 
 impl Iterator for PartBuffers<'_> {
     type Item = Buffer;
 
     fn next(&mut self) -> Option<Buffer> {
-        todo!("step 4: serializer")
+        match self.stage {
+            Stage::Short => {
+                self.stage = Stage::Done;
+                Some(Buffer {
+                    chunk: Some(self.data.to_vec()),
+                    head: self.head(),
+                    separator: Some(true),
+                    ..Default::default()
+                })
+            }
+            Stage::Head => {
+                self.stage = Stage::Chunks;
+                Some(Buffer {
+                    head: self.head(),
+                    ..Default::default()
+                })
+            }
+            Stage::Chunks => match self.chunks.next() {
+                Some(piece) => Some(Buffer {
+                    chunk: Some(piece.to_vec()),
+                    ..Default::default()
+                }),
+                None => {
+                    self.stage = Stage::Done;
+                    Some(Buffer {
+                        separator: Some(true),
+                        ..Default::default()
+                    })
+                }
+            },
+            Stage::Done => None,
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let n = match self.stage {
+            Stage::Short => 1,
+            Stage::Head => self.chunks.len() + 2,
+            Stage::Chunks => self.chunks.len() + 1,
+            Stage::Done => 0,
+        };
+        (n, Some(n))
     }
 }
+
+impl ExactSizeIterator for PartBuffers<'_> {}
+
+impl std::iter::FusedIterator for PartBuffers<'_> {}
 
 /// Options of the [`Parser`].
 #[derive(Clone, Debug)]
