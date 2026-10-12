@@ -499,10 +499,12 @@ try:
 
     def strip_case(name, buffers, note):
         control = StreamControl()
+        # control.reader clears the skip field in place: write the input first.
+        input_file = write_stream('strip_in_' + name, buffers)
         out = list(control.reader(iter(buffers)))
         manifest['strip_skips'].append({
             'name': name, 'note': note,
-            'input': write_stream('strip_in_' + name, buffers),
+            'input': input_file,
             'output': write_stream('strip_out_' + name, out),
             'observed': sorted(control._skip),
         })
