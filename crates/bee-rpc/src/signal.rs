@@ -3,6 +3,11 @@
 //! A Buffer with `signal: true` from the peer toggles the state: the first one
 //! closes (stop sending), the next one opens again. The sender waits while the
 //! state is closed.
+//!
+//! The wait is level-triggered: [`Signal::wait_open`] returns only when the
+//! state is open. A waiter checks the state again after each wake, so a wake
+//! while the state is closed (for example, the signal opened and closed again
+//! before the waiter ran) keeps it waiting.
 
 use std::future::poll_fn;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -18,10 +23,6 @@ pub struct Signal {
 #[derive(Debug)]
 struct State {
     open: bool,
-    /// Counts the changes from closed to open. A waiter that saw the signal
-    /// closed returns when this moves, even if the signal closed again before it
-    /// ran (as `Condition.notify_all` wakes the waiters of the reference).
-    opened: u64,
     /// The next id for a waiter.
     next_id: u64,
     /// The waiters, by id. A waiter replaces its waker at each poll and removes
@@ -35,7 +36,6 @@ impl Signal {
         Signal {
             state: Arc::new(Mutex::new(State {
                 open: true,
-                opened: 0,
                 next_id: 0,
                 waiters: Vec::new(),
             })),
@@ -51,7 +51,6 @@ impl Signal {
                 Vec::new()
             } else {
                 state.open = true;
-                state.opened = state.opened.wrapping_add(1);
                 std::mem::take(&mut state.waiters)
             }
         };
@@ -66,39 +65,42 @@ impl Signal {
     }
 
     /// Wait until the state is open. Returns at once when it is open.
+    ///
+    /// Level-triggered: it returns only when the state is open. After each wake
+    /// it checks the state again, and it waits on if the state is closed. The
+    /// check and the registration of the waker are done under one lock, and
+    /// [`Signal::change`] wakes the waiters after it releases the lock, so a
+    /// change cannot be lost between the check and the registration.
     pub async fn wait_open(&self) {
         let mut waiter = Waiter {
             signal: self,
-            seen: None,
+            id: None,
         };
         poll_fn(|cx| {
             let mut state = waiter.signal.lock();
             if state.open {
                 return Poll::Ready(());
             }
-            match waiter.seen {
-                Some((_, opened)) if opened != state.opened => Poll::Ready(()),
-                Some((id, _)) => {
-                    match state.waiters.iter_mut().find(|(i, _)| *i == id) {
-                        Some((_, waker)) => waker.clone_from(cx.waker()),
-                        None => state.waiters.push((id, cx.waker().clone())),
-                    }
-                    Poll::Pending
-                }
+            match waiter.id {
+                Some(id) => match state.waiters.iter_mut().find(|(i, _)| *i == id) {
+                    Some((_, waker)) => waker.clone_from(cx.waker()),
+                    // `change` took the waker when it woke us: register again.
+                    None => state.waiters.push((id, cx.waker().clone())),
+                },
                 None => {
                     let id = state.next_id;
                     state.next_id = state.next_id.wrapping_add(1);
-                    waiter.seen = Some((id, state.opened));
+                    waiter.id = Some(id);
                     state.waiters.push((id, cx.waker().clone()));
-                    Poll::Pending
                 }
             }
+            Poll::Pending
         })
         .await
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
-        // The state is a bool and counters: a panic in another thread cannot
+        // The state is a bool, a counter and a list: a panic in another thread cannot
         // leave it half changed.
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -114,14 +116,13 @@ impl Default for Signal {
 /// cancelled.
 struct Waiter<'a> {
     signal: &'a Signal,
-    /// The id of the waiter and the value of `opened` when it first saw the
-    /// signal closed.
-    seen: Option<(u64, u64)>,
+    /// The id of the waiter, once it has registered a waker.
+    id: Option<u64>,
 }
 
 impl Drop for Waiter<'_> {
     fn drop(&mut self) {
-        if let Some((id, _)) = self.seen {
+        if let Some(id) = self.id {
             self.signal.lock().waiters.retain(|(i, _)| *i != id);
         }
     }
