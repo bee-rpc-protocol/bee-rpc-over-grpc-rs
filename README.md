@@ -4,9 +4,9 @@ Rust port of [bee-rpc-over-grpc-py](https://github.com/bee-rpc-protocol/bee-rpc-
 Bee-RPC moves buffers of any size over gRPC. It splits a message into blocks, and
 each block has a hash, so a receiver can skip a block that it already holds.
 
-Status: **specification ready, port not implemented**. The public API is in
-`crates/bee-rpc/src/` with `todo!()` bodies. The tests in `crates/bee-rpc/tests/`
-fail until the port is done.
+Status: **the port is complete** (steps 1 to 7 of `PORTING.md`). The crate passes the
+vectors from the Python reference and the interop tests against a Python peer. The gRPC
+call is behind the feature `grpc`.
 
 | File | Content |
 |---|---|
