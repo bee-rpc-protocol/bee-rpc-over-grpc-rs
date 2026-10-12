@@ -138,6 +138,14 @@ impl StreamControl {
         !block_id.is_empty() && self.state().peer_skips.contains(block_id)
     }
 
+    /// The position of the first id in `ids` that the peer asked to skip. Takes
+    /// the lock once for the whole scan. `None` entries (no hash) never match.
+    fn first_skipped<'a>(&self, ids: impl Iterator<Item = Option<&'a [u8]>>) -> Option<usize> {
+        let state = self.state();
+        let mut ids = ids;
+        ids.position(|id| id.is_some_and(|id| !id.is_empty() && state.peer_skips.contains(id)))
+    }
+
     /// The ids that the peer asked to skip, sorted.
     pub fn peer_skips(&self) -> Vec<Vec<u8>> {
         let sorted: BTreeSet<Vec<u8>> = self.state().peer_skips.iter().cloned().collect();
@@ -182,9 +190,8 @@ impl SkipFilter {
     /// The depth of the shallowest open block that the peer asked to skip. The
     /// shallowest, so that a request for a parent takes its open children too.
     fn outermost_skipped(&self) -> Option<usize> {
-        self.stack
-            .iter()
-            .position(|id| id.as_deref().is_some_and(|id| self.control.should_skip(id)))
+        self.control
+            .first_skipped(self.stack.iter().map(Option::as_deref))
             .map(|i| i + 1)
     }
 
