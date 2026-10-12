@@ -1,4 +1,4 @@
-//! Step 6: reverse-direction block skip.
+//! Step 5: reverse-direction block skip.
 mod common;
 
 use bee_rpc::buffer::Buffer;
