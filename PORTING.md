@@ -23,7 +23,9 @@ Do not start these. They need new vectors and the approval of a maintainer.
 - A block store on disk: multiblock directories, `_.json`, the wbp file
   (`block_driver.py`, `block_builder.py`, `block_splitter.py`, `reader.py`).
 - The send side of blocks: build a multiblock object from a message, and frame
-  blocks to `block_depth` (`read_from_registry`, `build_multiblock`).
+  blocks to `block_depth` (`read_from_registry`, `build_multiblock`). (Version 0.2.0
+  can send Buffers that are already framed, with their blocks, for a relay:
+  `grpc::call_buffers`. It does not build blocks.)
 - Partitions (`Head.partitions`, `get_submessage`, `put_submessage`).
 - The TLS identity check of a Celaut node. It is Celaut-specific and belongs in
   `celaut-wire` in celaut-project/chatui.

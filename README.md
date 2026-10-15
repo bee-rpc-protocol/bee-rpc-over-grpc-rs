@@ -8,6 +8,15 @@ Status: **the port is complete** (steps 1 to 7 of `PORTING.md`). The crate passe
 vectors from the Python reference and the interop tests against a Python peer. The gRPC
 call is behind the feature `grpc`.
 
+Version 0.2.0 adds two calls for a relay, a client that takes the Buffers of one call or
+of a .bee file and gives them to another call, without the blocks in memory:
+`grpc::call_buffers` sends Buffers that are already framed, as they are, with the flow
+control signal and the skip requests of the peer; `grpc::call_raw` gives the Buffers of a
+response as they are. If the input of `call_buffers` fails, the call sends cancel
+markers (blocks that intersect) before it ends the request direction, so that a peer
+refuses the input instead of taking a cut message for a complete one. See the docs of
+`src/grpc.rs` and `tests/relay.rs`.
+
 | File | Content |
 |---|---|
 | `PORTING.md` | The steps of the port, in order |

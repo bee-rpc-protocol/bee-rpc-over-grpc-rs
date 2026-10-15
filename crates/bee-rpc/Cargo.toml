@@ -26,3 +26,6 @@ tokio-stream = { version = "0.1", optional = true }
 hex = "0.4"
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "process", "io-util"] }
+# The in-process gRPC server of tests/relay.rs.
+tokio-stream = { version = "0.1", features = ["net"] }
+tonic-prost = "0.14"
