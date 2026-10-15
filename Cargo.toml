@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/bee-rpc", "tools/gen-protos"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 license = "GPL-3.0-only"
 repository = "https://github.com/bee-rpc-protocol/bee-rpc-over-grpc-rs"

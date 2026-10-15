@@ -311,6 +311,38 @@ async fn an_error_of_the_input_ends_with_markers_that_the_receiver_refuses() {
     );
 }
 
+#[tokio::test]
+async fn the_error_of_the_input_comes_first_when_the_receiver_answers_with_an_error() {
+    // nodo answers a refused request with an error status at once.
+    let handler: Handler = Arc::new(move |mut request| {
+        reply(move |tx| {
+            tokio::spawn(async move {
+                let mut parser = Parser::new(ParseOptions::accepting([1]));
+                while let Ok(Some(buffer)) = request.message().await {
+                    if let Err(e) = parser.push(buffer) {
+                        let _ = tx.send(Err(Status::unknown(e.to_string()))).await;
+                        return;
+                    }
+                }
+            });
+        })
+    });
+    for _ in 0..20 {
+        let channel = serve(handler.clone()).await;
+        let mut items: Vec<Result<Buffer, Error>> = serialize_part(&Part::new(1, vec![1u8; 8]))
+            .map(Ok)
+            .collect();
+        items.push(Err(Error::Decode("the file is cut".into())));
+        let error = call_buffers(channel, PATH, Box::pin(tokio_stream::iter(items)), opts())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, Error::Decode(ref t) if t == "the file is cut"),
+            "{error}"
+        );
+    }
+}
+
 /// The parts that a receiver gets from `before`, then the cancel markers, then a
 /// clean end: it must refuse, never give a cut message.
 fn after_markers(before: Vec<Buffer>) -> Result<Vec<Part>, Error> {

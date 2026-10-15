@@ -374,17 +374,21 @@ async fn exchange(
     let mut out = Vec::new();
     loop {
         let next = tokio::select! {
-            next = response.message() => next.map_err(transport)?,
+            next = response.message() => next,
             // The input failed: return its error once the markers left.
-            _ = failed.notify.notified() => None,
+            _ = failed.notify.notified() => Ok(None),
         };
+        // The error of the input comes first: the peer refuses the markers, so its error
+        // (or the end of its answer) is a result of the failed input.
         if failed.has_error() {
             failed.wait_markers().await;
             if let Some(error) = failed.take() {
                 return Err(error);
             }
         }
-        let Some(buffer) = next else { break };
+        let Some(buffer) = next.map_err(transport)? else {
+            break;
+        };
         let (back, parsed) = push(parser, buffer).await?;
         parser = back;
         out.extend(parsed?);
