@@ -85,7 +85,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bee-rpc"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake2",
  "hex",
@@ -274,7 +274,7 @@ dependencies = [
 
 [[package]]
 name = "gen-protos"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "prost-build",
 ]
