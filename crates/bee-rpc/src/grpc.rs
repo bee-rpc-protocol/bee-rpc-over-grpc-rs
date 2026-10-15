@@ -365,11 +365,21 @@ async fn exchange(
     let mut client = tonic::client::Grpc::new(channel);
     client.ready().await.map_err(transport)?;
     let codec = tonic_prost::ProstCodec::<Buffer, Buffer>::default();
-    let mut response = client
-        .streaming(request, path, codec)
-        .await
-        .map_err(transport)?
-        .into_inner();
+    // A peer that refuses the cancel markers before its first answer fails the call
+    // here, with no header (a gRPC answer of trailers only): the error of the input
+    // comes first in that case too.
+    let mut response = match client.streaming(request, path, codec).await {
+        Ok(response) => response.into_inner(),
+        Err(status) => {
+            if failed.has_error() {
+                failed.wait_markers().await;
+                if let Some(error) = failed.take() {
+                    return Err(error);
+                }
+            }
+            return Err(transport(status));
+        }
+    };
 
     let mut out = Vec::new();
     loop {

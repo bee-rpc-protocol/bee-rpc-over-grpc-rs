@@ -34,16 +34,19 @@ const PATH: &str = "/bee.Relay/Call";
 
 type Reply = Pin<Box<dyn Stream<Item = Result<Buffer, Status>> + Send>>;
 type Handler = Arc<dyn Fn(Streaming<Buffer>) -> Reply + Send + Sync>;
+/// A handler that can fail before its first answer: the server then sends no header,
+/// only trailers with the error, as nodo does when it refuses a request.
+type EarlyHandler = Arc<dyn Fn(Streaming<Buffer>) -> BoxFuture<Reply, Status> + Send + Sync>;
 
 /// A gRPC server with one bidi method, `PATH`, that runs `handler`.
 #[derive(Clone)]
-struct Server(Handler);
+struct Server(EarlyHandler);
 
 impl tonic::server::NamedService for Server {
     const NAME: &'static str = "bee.Relay";
 }
 
-struct Method(Handler);
+struct Method(EarlyHandler);
 
 impl tonic::server::StreamingService<Buffer> for Method {
     type Response = Buffer;
@@ -52,7 +55,7 @@ impl tonic::server::StreamingService<Buffer> for Method {
 
     fn call(&mut self, request: tonic::Request<Streaming<Buffer>>) -> Self::Future {
         let reply = (self.0)(request.into_inner());
-        Box::pin(async move { Ok(tonic::Response::new(reply)) })
+        Box::pin(async move { Ok(tonic::Response::new(reply.await?)) })
     }
 }
 
@@ -81,6 +84,15 @@ where
 
 /// Serve `handler` on the loopback and give a channel to it.
 async fn serve(handler: Handler) -> tonic::transport::Channel {
+    serve_early(Arc::new(move |request| {
+        let reply = handler(request);
+        Box::pin(async move { Ok(reply) })
+    }))
+    .await
+}
+
+/// [`serve`] for a handler that can fail before its first answer.
+async fn serve_early(handler: EarlyHandler) -> tonic::transport::Channel {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(
@@ -329,6 +341,36 @@ async fn the_error_of_the_input_comes_first_when_the_receiver_answers_with_an_er
     });
     for _ in 0..20 {
         let channel = serve(handler.clone()).await;
+        let mut items: Vec<Result<Buffer, Error>> = serialize_part(&Part::new(1, vec![1u8; 8]))
+            .map(Ok)
+            .collect();
+        items.push(Err(Error::Decode("the file is cut".into())));
+        let error = call_buffers(channel, PATH, Box::pin(tokio_stream::iter(items)), opts())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, Error::Decode(ref t) if t == "the file is cut"),
+            "{error}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_error_of_the_input_comes_first_when_the_receiver_fails_before_its_first_answer() {
+    // nodo refuses a request before its first answer: the call ends with trailers only.
+    let handler: EarlyHandler = Arc::new(move |mut request| {
+        Box::pin(async move {
+            let mut parser = Parser::new(ParseOptions::accepting([1]));
+            while let Ok(Some(buffer)) = request.message().await {
+                if let Err(e) = parser.push(buffer) {
+                    return Err(Status::unknown(e.to_string()));
+                }
+            }
+            Err(Status::unknown("no service"))
+        })
+    });
+    for _ in 0..20 {
+        let channel = serve_early(handler.clone()).await;
         let mut items: Vec<Result<Buffer, Error>> = serialize_part(&Part::new(1, vec![1u8; 8]))
             .map(Ok)
             .collect();
