@@ -8,7 +8,7 @@ f41f00585f6cd924438901e65a0a05ada20ecfe05f3aff7817bc4fdd778abd13  crates/bee-rpc
 4d382983327df285bf78831949b6b98c050d6e5699a024c5c4fd1d0afc6bf6d6  crates/bee-rpc/tests/parse.rs
 5c8a08146e1b4bcc6c30d02e352cd2f5e39c9c30838e98a759f0993e997b0d00  crates/bee-rpc/tests/parse_errors.rs
 d4b22780ee09b51abe1030cabe8ac4d5d4ac9396fb1a829fa08ab85f2fa61f84  crates/bee-rpc/tests/pointer.rs
-02b688c6fbad73106c667bec3ff3d3f26e49be9b99dd2ff0872f2d526bcb049a  crates/bee-rpc/tests/relay.rs
+725fa1a5b64cf7c4b5b14ea70baec33eed334ef41c8f919064377a58a89dee64  crates/bee-rpc/tests/relay.rs
 ab774a017e641e9f7d674d2e0b3f0d2a466c53573a45fa4b914dda90449a4bef  crates/bee-rpc/tests/serialize.rs
 c34d41961974869102fef4dd42ba709072dc3df26029dc3f42f503bf58adf998  crates/bee-rpc/tests/signal.rs
 3d06d0bef0a13bde8fd40d8872cdd5181cdf0db30555a7e48fc7580c5add95a2  crates/bee-rpc/tests/skip.rs

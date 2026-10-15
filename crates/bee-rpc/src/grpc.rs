@@ -365,26 +365,40 @@ async fn exchange(
     let mut client = tonic::client::Grpc::new(channel);
     client.ready().await.map_err(transport)?;
     let codec = tonic_prost::ProstCodec::<Buffer, Buffer>::default();
-    let mut response = client
-        .streaming(request, path, codec)
-        .await
-        .map_err(transport)?
-        .into_inner();
+    // A peer that refuses the cancel markers before its first answer fails the call
+    // here, with no header (a gRPC answer of trailers only): the error of the input
+    // comes first in that case too.
+    let mut response = match client.streaming(request, path, codec).await {
+        Ok(response) => response.into_inner(),
+        Err(status) => {
+            if failed.has_error() {
+                failed.wait_markers().await;
+                if let Some(error) = failed.take() {
+                    return Err(error);
+                }
+            }
+            return Err(transport(status));
+        }
+    };
 
     let mut out = Vec::new();
     loop {
         let next = tokio::select! {
-            next = response.message() => next.map_err(transport)?,
+            next = response.message() => next,
             // The input failed: return its error once the markers left.
-            _ = failed.notify.notified() => None,
+            _ = failed.notify.notified() => Ok(None),
         };
+        // The error of the input comes first: the peer refuses the markers, so its error
+        // (or the end of its answer) is a result of the failed input.
         if failed.has_error() {
             failed.wait_markers().await;
             if let Some(error) = failed.take() {
                 return Err(error);
             }
         }
-        let Some(buffer) = next else { break };
+        let Some(buffer) = next.map_err(transport)? else {
+            break;
+        };
         let (back, parsed) = push(parser, buffer).await?;
         parser = back;
         out.extend(parsed?);
