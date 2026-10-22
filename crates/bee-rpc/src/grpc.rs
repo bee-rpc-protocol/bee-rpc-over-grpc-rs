@@ -36,7 +36,12 @@
 //! - [`call_raw`] sends parts and gives the Buffers of the response as they are, one
 //!   at a time, without the parser: a block is not rebuilt in memory, and its hash
 //!   is not checked (the next receiver checks it). A Buffer with `signal: true`
-//!   toggles the signal of the request direction, the same as in the parser.
+//!   toggles the signal of the request direction, the same as in the parser. With
+//!   `block_skip`, the request direction stays open after the parts, as in [`call`],
+//!   and [`RawResponse::request_skip`] asks the peer to drop the rest of a block: the
+//!   caller decides which blocks it does not need, because there is no store. A
+//!   reader that needs only the parts of a message around a large block (the
+//!   specification of a service around its filesystem) gets them without the block.
 
 use std::pin::Pin;
 use std::str::FromStr;
@@ -68,6 +73,7 @@ pub struct CallOptions {
     /// Parser options for the response.
     pub parse: ParseOptions,
     /// Hold the request direction open for skip requests (`client_grpc(block_skip=True)`).
+    /// In [`call_raw`], the caller makes the requests with [`RawResponse::request_skip`].
     pub block_skip: bool,
     /// A deadline for the whole call.
     pub timeout: Option<std::time::Duration>,
@@ -121,6 +127,8 @@ pub async fn call_buffers(
 pub struct RawResponse {
     response: tonic::Streaming<Buffer>,
     signal: Signal,
+    /// The skip requests of the caller, with `block_skip`.
+    control: Option<StreamControl>,
     _task: SendTask,
 }
 
@@ -141,12 +149,36 @@ impl RawResponse {
         }
         Ok(buffer)
     }
+
+    /// Ask the peer to drop the rest of the block `block_id` (the hash of its
+    /// expansion, in the algorithm of `options.parse`), as a receiver does for a block
+    /// that it already holds (`control.skip_buffer`). The request goes out on the
+    /// request direction, which [`call_raw`] holds open for it with `block_skip`. A
+    /// second request for the same id sends nothing.
+    ///
+    /// The peer drops the Buffers of the block that it has not sent yet, and the
+    /// markers of its children; the end marker of the block still comes, once. The
+    /// Buffers that were on the way come too, so the caller must expect part of the
+    /// body before the end marker.
+    ///
+    /// False, with nothing sent, if the call was made without `block_skip`.
+    pub fn request_skip(&self, block_id: &[u8]) -> bool {
+        match &self.control {
+            Some(control) => {
+                control.request_skip(block_id);
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 /// Call the bidi method at `path`, send `parts`, and give the response Buffers as
 /// they are (see the module docs). With `options.timeout`, the deadline is set on
-/// the request; the caller limits the time to read the response. `options.parse`
-/// and `options.block_skip` are not used: there is no parser.
+/// the request; the caller limits the time to read the response. With
+/// `options.block_skip`, the request direction stays open after the parts until the
+/// response is dropped, for [`RawResponse::request_skip`]; `options.parse` gives the
+/// algorithm of the block ids. The response is not parsed.
 pub async fn call_raw(
     channel: tonic::transport::Channel,
     path: &str,
@@ -158,10 +190,13 @@ pub async fn call_raw(
     let (tx, rx) = mpsc::channel::<Buffer>(1);
     let done = Arc::new(AtomicBool::new(false));
     let failed = Arc::new(InputFailure::default());
+    let control = options
+        .block_skip
+        .then(|| StreamControl::new(options.parse.algorithm));
     let handle = tokio::spawn(send_side(
         Input::Parts(parts),
         signal.clone(),
-        None,
+        control.clone(),
         tx,
         done.clone(),
         failed.clone(),
@@ -183,6 +218,7 @@ pub async fn call_raw(
     Ok(RawResponse {
         response,
         signal,
+        control,
         _task: task,
     })
 }
