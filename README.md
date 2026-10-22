@@ -17,6 +17,11 @@ markers (blocks that intersect) before it ends the request direction, so that a 
 refuses the input instead of taking a cut message for a complete one. See the docs of
 `src/grpc.rs` and `tests/relay.rs`.
 
+Version 0.3.0 lets `call_raw` skip blocks: with `block_skip`, the request direction stays
+open, and `RawResponse::request_skip` asks the peer to drop the rest of a block. A client
+that needs only the small parts of a message around a large block (the specification of a
+Celaut service around its filesystem) reads them without the block.
+
 | File | Content |
 |---|---|
 | `PORTING.md` | The steps of the port, in order |

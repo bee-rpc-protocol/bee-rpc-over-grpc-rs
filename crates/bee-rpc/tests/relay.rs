@@ -4,7 +4,8 @@
 //! An in-process gRPC server parses what it gets with the parser of this crate, so a
 //! block that is relayed must still hash to its id. The cases come from the parse
 //! vectors of the Python reference. With `BEE_RPC_PYTHON`, `call_raw` also reads the
-//! streams of the Python peer.
+//! streams of the Python peer. With `block_skip`, `call_raw` asks the in-process server,
+//! which drops skipped blocks with `SkipFilter` as the reference does, to skip a block.
 #![cfg(feature = "grpc")]
 
 mod common;
@@ -21,6 +22,9 @@ use std::time::Duration;
 use bee_rpc::buffer::Buffer;
 use bee_rpc::frame::{serialize_part, ParseOptions, Parser, Part};
 use bee_rpc::grpc::{call_buffers, call_raw, cancel_markers, BufferStream, CallOptions};
+use bee_rpc::hash::HashAlgorithm;
+use bee_rpc::pointer::block_pointer;
+use bee_rpc::skip::{skipped_block_id, SkipFilter, StreamControl};
 use bee_rpc::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -530,4 +534,183 @@ async fn a_raw_response_from_python_is_the_bee_file_that_it_reads() {
             "{name}"
         );
     }
+}
+
+/// The body of the block of [`block_response`]: this many chunks of 64 KiB, 12.8 MB.
+const BODY_CHUNKS: usize = 200;
+const BODY_CHUNK: usize = 64 * 1024;
+
+/// A message with a large block in the middle, as the Service of a package has its
+/// filesystem: a chunk before, the block (start marker, body, end marker), a chunk after,
+/// and the separator. Gives the Buffers and the id of the block. Made once: the hash of
+/// 12.8 MB takes seconds in a debug build.
+fn block_response() -> (Vec<Buffer>, Vec<u8>) {
+    static MADE: std::sync::OnceLock<(Vec<Buffer>, Vec<u8>)> = std::sync::OnceLock::new();
+    MADE.get_or_init(make_block_response).clone()
+}
+
+fn make_block_response() -> (Vec<Buffer>, Vec<u8>) {
+    let body: Vec<Vec<u8>> = (0..BODY_CHUNKS)
+        .map(|i| vec![i as u8; BODY_CHUNK])
+        .collect();
+    let id = HashAlgorithm::Sha3_256.digest(&body.concat());
+    let marker = || Buffer {
+        block: Some(block_pointer(&id, HashAlgorithm::Sha3_256, false)),
+        ..Default::default()
+    };
+    let chunk = |data: &[u8]| Buffer {
+        chunk: Some(data.to_vec()),
+        ..Default::default()
+    };
+    let mut out = vec![Buffer {
+        head: Some(bee_rpc::buffer::buffer::Head {
+            index: 1,
+            partitions: Vec::new(),
+        }),
+        chunk: Some(b"before".to_vec()),
+        ..Default::default()
+    }];
+    out.push(marker());
+    out.extend(body.iter().map(|b| chunk(b)));
+    out.push(marker());
+    out.push(chunk(b"after"));
+    out.push(Buffer {
+        separator: Some(true),
+        ..Default::default()
+    });
+    (out, id)
+}
+
+/// A server that sends [`block_response`] slowly, one Buffer every 2 ms, and drops what
+/// the client asks to skip, as the reference does on the send side (`GetService` of
+/// nodo: `StreamControl.watch()` on the request, `respond(control=...)`). It records
+/// the skip requests that it saw.
+async fn skipping_server(seen: Arc<Mutex<Vec<Vec<u8>>>>) -> tonic::transport::Channel {
+    let handler: Handler = Arc::new(move |mut request| {
+        let seen = seen.clone();
+        reply(move |tx| {
+            tokio::spawn(async move {
+                let control = StreamControl::new(HashAlgorithm::Sha3_256);
+                let watch = control.clone();
+                let record = seen.clone();
+                tokio::spawn(async move {
+                    while let Ok(Some(buffer)) = request.message().await {
+                        if let Some(id) = skipped_block_id(&buffer, HashAlgorithm::Sha3_256) {
+                            record.lock().unwrap().push(id);
+                        }
+                        watch.observe(&buffer);
+                    }
+                });
+                let mut filter = SkipFilter::new(control);
+                for buffer in block_response().0 {
+                    tokio::time::sleep(Duration::from_millis(2)).await;
+                    if let Some(buffer) = filter.push(buffer) {
+                        if tx.send(Ok(buffer)).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+            });
+        })
+    });
+    serve(handler).await
+}
+
+/// What a raw reader saw: the chunks outside the block, the bytes of body, and the
+/// markers of the block.
+#[derive(Debug, Default)]
+struct Seen {
+    outside: Vec<Vec<u8>>,
+    body: usize,
+    markers: usize,
+    separator: bool,
+}
+
+/// Read a raw response; at the first marker, ask to skip the block if `skip`.
+async fn read_skipping(mut response: bee_rpc::grpc::RawResponse, skip: bool) -> (Seen, bool) {
+    let mut seen = Seen::default();
+    let mut asked = false;
+    while let Some(buffer) = response.next().await.unwrap() {
+        if let Some(block) = &buffer.block {
+            seen.markers += 1;
+            if skip && seen.markers == 1 {
+                let id = &block.hashes[0].value;
+                asked = response.request_skip(id);
+            }
+            continue;
+        }
+        if let Some(chunk) = buffer.chunk {
+            if seen.markers == 1 {
+                seen.body += chunk.len();
+            } else {
+                seen.outside.push(chunk);
+            }
+        }
+        if buffer.separator == Some(true) {
+            seen.separator = true;
+        }
+    }
+    (seen, asked)
+}
+
+#[tokio::test]
+async fn a_raw_response_with_block_skip_drops_the_block_that_the_caller_skips() {
+    let seen_by_server = Arc::new(Mutex::new(Vec::new()));
+    let channel = skipping_server(seen_by_server.clone()).await;
+    let options = CallOptions {
+        block_skip: true,
+        ..opts()
+    };
+    let response = call_raw(channel, PATH, vec![Part::new(1, b"ask".to_vec())], options)
+        .await
+        .unwrap();
+    let (seen, asked) = read_skipping(response, true).await;
+    assert!(asked);
+    let (_, id) = block_response();
+    assert_eq!(*seen_by_server.lock().unwrap(), vec![id]);
+    // The body that was on the way when the request arrived, and not the rest: the
+    // whole body is 12.8 MB.
+    let total = BODY_CHUNKS * BODY_CHUNK;
+    assert!(
+        seen.body < total / 4,
+        "{} of {total} bytes of body arrived",
+        seen.body
+    );
+    // The end marker comes once, and so does what follows the block.
+    assert_eq!(seen.markers, 2);
+    assert_eq!(seen.outside, vec![b"before".to_vec(), b"after".to_vec()]);
+    assert!(seen.separator);
+}
+
+#[tokio::test]
+async fn a_raw_response_without_block_skip_sends_no_request_and_gives_the_whole_block() {
+    let seen_by_server = Arc::new(Mutex::new(Vec::new()));
+    let channel = skipping_server(seen_by_server.clone()).await;
+    let response = call_raw(channel, PATH, vec![Part::new(1, b"ask".to_vec())], opts())
+        .await
+        .unwrap();
+    let (seen, asked) = read_skipping(response, true).await;
+    assert!(!asked);
+    assert!(seen_by_server.lock().unwrap().is_empty());
+    assert_eq!(seen.body, BODY_CHUNKS * BODY_CHUNK);
+    assert_eq!(seen.markers, 2);
+    assert_eq!(seen.outside, vec![b"before".to_vec(), b"after".to_vec()]);
+}
+
+#[tokio::test]
+async fn a_raw_response_with_block_skip_and_no_request_gives_the_whole_block() {
+    // Holding the request direction open changes nothing by itself.
+    let seen_by_server = Arc::new(Mutex::new(Vec::new()));
+    let channel = skipping_server(seen_by_server.clone()).await;
+    let options = CallOptions {
+        block_skip: true,
+        ..opts()
+    };
+    let response = call_raw(channel, PATH, vec![Part::new(1, b"ask".to_vec())], options)
+        .await
+        .unwrap();
+    let (seen, _) = read_skipping(response, false).await;
+    assert!(seen_by_server.lock().unwrap().is_empty());
+    assert_eq!(seen.body, BODY_CHUNKS * BODY_CHUNK);
+    assert!(seen.separator);
 }
