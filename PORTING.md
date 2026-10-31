@@ -20,8 +20,9 @@ Each module has its rules in its doc comment. The tests check those rules.
 
 Do not start these. They need new vectors and the approval of a maintainer.
 
-- A block store on disk: multiblock directories, `_.json`, the wbp file
-  (`block_driver.py`, `block_builder.py`, `block_splitter.py`, `reader.py`).
+- Writing a block store on disk: building multiblock directories, `_.json` and the wbp
+  file (`block_driver.py`, `block_builder.py`, `block_splitter.py`). Reading one is done:
+  `store` (version 0.4.0, `reader.py`).
 - The send side of blocks: build a multiblock object from a message, and frame
   blocks to `block_depth` (`read_from_registry`, `build_multiblock`). (Version 0.2.0
   can send Buffers that are already framed, with their blocks, for a relay:
