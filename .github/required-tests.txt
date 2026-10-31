@@ -19,3 +19,4 @@ interop
 # after the port: the calls that relay framed Buffers
 relay
 store
+store_race
