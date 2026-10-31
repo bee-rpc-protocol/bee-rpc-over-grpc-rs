@@ -22,6 +22,16 @@ open, and `RawResponse::request_skip` asks the peer to drop the rest of a block.
 that needs only the small parts of a message around a large block (the specification of a
 Celaut service around its filesystem) reads them without the block.
 
+Version 0.4.0 adds `store`, the block store on disk and the send side of a stored object:
+`Store::read_registry` and `Store::read_message` read a multiblock directory (`_.json`, the
+files and the blocks that it names) and give the Buffers that the reference sends for it:
+the chunks, the start and end marker of each block, the nested levels down to the block depth,
+the head and the separator. A block that is a single file is checked against its id before it
+leaves. A service that carries its dependencies as directories (`__services__/<hash>`) sends
+them with it, with no Python. The vectors have the directories and the streams that the
+reference makes from them (`store` in `manifest.json`), and the reads that it refuses
+(`store_errors`). See `src/store.rs` and `tests/store.rs`.
+
 | File | Content |
 |---|---|
 | `PORTING.md` | The steps of the port, in order |

@@ -33,7 +33,7 @@ import tempfile
 
 from bee_rpc import block_builder, buffer_pb2, client
 from bee_rpc.client import parse_from_buffer, serialize_to_buffer, skip_requested_blocks
-from bee_rpc.reader import read_multiblock_directory
+from bee_rpc.reader import read_from_registry, read_multiblock_directory
 from bee_rpc.control import StreamControl, skip_buffer, skipped_block_id
 from bee_rpc.utils import (
     CHUNK_SIZE, Dir, Enviroment, block_id_from_pointer, block_pointer,
@@ -62,6 +62,8 @@ manifest = {
     'skip': [],
     'strip_skips': [],
     'bee_file': [],
+    'store': [],
+    'store_errors': [],
 }
 
 
@@ -288,6 +290,18 @@ try:
         buffers = list(serialize_to_buffer(
             message_iterator=iter([Dir(dir=obj_dir, _type=buffer_pb2.Buffer)]),
             indices={1: buffer_pb2.Buffer}))
+        # The directory that was sent and the blocks it points to, for the store tests.
+        store_root = os.path.join(OUT, 'store', name)
+        shutil.copytree(obj_dir.rstrip(os.sep), os.path.join(store_root, 'obj'))
+        shutil.copytree(Enviroment.block_dir.rstrip(os.sep), os.path.join(store_root, 'blocks'))
+        manifest['store'].append({
+            'name': name,
+            'block_depth': block_depth,
+            'obj': 'store/' + name + '/obj',
+            'blocks': 'store/' + name + '/blocks',
+            'stream': 'parse_' + name + '.bee',
+            'head_index': 1,
+        })
         # The receiver holds no block: parse with an empty block directory.
         fresh_env(root)
         parsed = python_parse(buffers, {1: bytes}, message_mode=False)
@@ -540,6 +554,54 @@ try:
     })
 finally:
     shutil.rmtree(root, ignore_errors=True)
+
+# -- 7. the store: reads that fail ---------------------------------------------------
+
+def store_error_case(name, base, mutation, note):
+    """Copy the stored tree of `base`, apply `mutation`, and ask the reference to read it."""
+    case = next(c for c in manifest['store'] if c['name'] == base)
+    work = tempfile.mkdtemp(prefix='store-err-')
+    shutil.copytree(os.path.join(OUT, case['obj']), os.path.join(work, 'obj'))
+    shutil.copytree(os.path.join(OUT, case['blocks']), os.path.join(work, 'blocks'))
+    target = os.path.join(work, mutation['path'])
+    if mutation['op'] == 'flip_first_byte':
+        with open(target, 'rb') as f:
+            data = bytearray(f.read())
+        data[0] ^= 0xFF
+        with open(target, 'wb') as f:
+            f.write(data)
+    elif mutation['op'] == 'delete':
+        os.remove(target)
+    elif mutation['op'] == 'write':
+        with open(target, 'w') as f:
+            f.write(mutation['text'])
+    else:
+        raise AssertionError(mutation)
+    modify_env(block_dir=os.path.join(work, 'blocks') + os.sep, block_depth=case['block_depth'])
+    try:
+        list(read_from_registry(os.path.join(work, 'obj')))
+        raised = None
+    except Exception as e:  # the reference raises plain Exceptions and IndexError
+        raised = type(e).__name__
+    shutil.rmtree(work)
+    assert raised is not None, name
+    manifest['store_errors'].append({
+        'name': name, 'base': base, 'mutation': mutation,
+        'python_raises': raised, 'note': note,
+    })
+
+
+_one = next(c for c in manifest['store'] if c['name'] == 'one_block')
+_leaf = [n for n in os.listdir(os.path.join(OUT, _one['blocks']))][0]
+store_error_case('block_with_other_bytes', 'one_block',
+                 {'op': 'flip_first_byte', 'path': 'blocks/' + _leaf},
+                 'The file of a block holds other bytes than its id names.')
+store_error_case('block_missing', 'one_block',
+                 {'op': 'delete', 'path': 'blocks/' + _leaf},
+                 'The directory points to a block that the store does not have.')
+store_error_case('entry_without_lengths', 'one_block',
+                 {'op': 'write', 'path': 'obj/_.json', 'text': '[["' + _leaf + '"]]'},
+                 'A block entry of _.json without its list of lengths.')
 
 with open(os.path.join(OUT, 'manifest.json'), 'w') as f:
     json.dump(manifest, f, indent=1, sort_keys=True)

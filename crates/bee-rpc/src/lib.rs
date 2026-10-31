@@ -30,6 +30,7 @@ pub mod hash;
 pub mod pointer;
 pub mod signal;
 pub mod skip;
+pub mod store;
 
 #[cfg(feature = "grpc")]
 pub mod grpc;

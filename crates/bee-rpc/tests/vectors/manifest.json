@@ -758,6 +758,73 @@
   "buffer": "0a0032460a440a20a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a12209c245b792615c134c2eac4659bd37d646cfb5a6bb8b1d46ac126846f08a4ca94",
   "skipped_block_id": "9c245b792615c134c2eac4659bd37d646cfb5a6bb8b1d46ac126846f08a4ca94"
  },
+ "store": [
+  {
+   "block_depth": 1,
+   "blocks": "store/one_block/blocks",
+   "head_index": 1,
+   "name": "one_block",
+   "obj": "store/one_block/obj",
+   "stream": "parse_one_block.bee"
+  },
+  {
+   "block_depth": 1,
+   "blocks": "store/big_block/blocks",
+   "head_index": 1,
+   "name": "big_block",
+   "obj": "store/big_block/obj",
+   "stream": "parse_big_block.bee"
+  },
+  {
+   "block_depth": 1,
+   "blocks": "store/nested_depth1/blocks",
+   "head_index": 1,
+   "name": "nested_depth1",
+   "obj": "store/nested_depth1/obj",
+   "stream": "parse_nested_depth1.bee"
+  },
+  {
+   "block_depth": 2,
+   "blocks": "store/nested_depth2/blocks",
+   "head_index": 1,
+   "name": "nested_depth2",
+   "obj": "store/nested_depth2/obj",
+   "stream": "parse_nested_depth2.bee"
+  }
+ ],
+ "store_errors": [
+  {
+   "base": "one_block",
+   "mutation": {
+    "op": "flip_first_byte",
+    "path": "blocks/1b1f4a553414f0967725ae77ef7272ffbfbd007e6fb522ce52cbcb501c6327cc"
+   },
+   "name": "block_with_other_bytes",
+   "note": "The file of a block holds other bytes than its id names.",
+   "python_raises": "Exception"
+  },
+  {
+   "base": "one_block",
+   "mutation": {
+    "op": "delete",
+    "path": "blocks/1b1f4a553414f0967725ae77ef7272ffbfbd007e6fb522ce52cbcb501c6327cc"
+   },
+   "name": "block_missing",
+   "note": "The directory points to a block that the store does not have.",
+   "python_raises": "Exception"
+  },
+  {
+   "base": "one_block",
+   "mutation": {
+    "op": "write",
+    "path": "obj/_.json",
+    "text": "[[\"1b1f4a553414f0967725ae77ef7272ffbfbd007e6fb522ce52cbcb501c6327cc\"]]"
+   },
+   "name": "entry_without_lengths",
+   "note": "A block entry of _.json without its list of lengths.",
+   "python_raises": "IndexError"
+  }
+ ],
  "strip_skips": [
   {
    "input": "strip_in_inert_removed.bee",

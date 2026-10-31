@@ -43,6 +43,11 @@ pub enum Error {
     #[error("bee-rpc: decode error: {0}")]
     Decode(String),
 
+    /// A block store that cannot be read: a missing block, or a `_.json` that is not in the
+    /// format of the reference.
+    #[error("bee-rpc: store: {0}")]
+    Store(String),
+
     /// An I/O error.
     #[error(transparent)]
     Io(#[from] std::io::Error),
