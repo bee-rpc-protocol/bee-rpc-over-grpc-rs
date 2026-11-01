@@ -34,12 +34,12 @@
 //! error, and so cannot name a path outside of the block directory.
 
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use crate::buffer::buffer::{Block, Head};
 use crate::buffer::Buffer;
-use crate::hash::HashAlgorithm;
+use crate::hash::{HashAlgorithm, Hasher};
 use crate::pointer::block_pointer;
 use crate::{Error, CHUNK_SIZE, MAX_BLOCK_NESTING};
 
@@ -310,8 +310,18 @@ enum Task {
     },
     /// A file that is being read in chunks.
     File(File),
+    /// A block that is a single file: read in chunks, and hashed again as it goes.
+    Block(Box<BlockFile>),
     /// A Buffer that is sent as it is: the end marker of a block.
     Marker(Block),
+}
+
+/// A block file that was checked, and the hash of what is sent from it.
+struct BlockFile {
+    file: File,
+    hasher: Hasher,
+    expected: Vec<u8>,
+    id: String,
 }
 
 /// The Buffers of one stored object, one at a time. See [`Store::read_registry`]. After an
@@ -374,7 +384,11 @@ impl RegistryReader {
             return self.push_dir(&path, ignore_blocks, depth, level);
         }
         // Before the first byte leaves: a block that is cut or changed on disk must stop
-        // the stream, not go out with its marker and little else.
+        // the stream, not go out with its marker and little else. The check and the send
+        // use the same handle, so a file that is replaced (renamed over) after the check
+        // is not the one that is sent. A file that is written in place after the check is
+        // caught by the hash that the send computes: the end of the file is an error, and
+        // the end marker of the block does not leave.
         let mut hasher = self.store.algorithm.hasher();
         let mut file = File::open(&path)?;
         let mut piece = vec![0u8; CHUNK_SIZE];
@@ -392,7 +406,13 @@ impl RegistryReader {
                 actual: hex(&actual),
             });
         }
-        self.stack.push(Task::File(File::open(&path)?));
+        file.seek(SeekFrom::Start(0))?;
+        self.stack.push(Task::Block(Box::new(BlockFile {
+            file,
+            hasher: self.store.algorithm.hasher(),
+            expected,
+            id: id.to_string(),
+        })));
         Ok(())
     }
 
@@ -407,6 +427,44 @@ impl RegistryReader {
                         block: Some(block),
                         ..Buffer::default()
                     }))
+                }
+                Task::Block(mut block) => {
+                    let mut chunk = vec![0u8; CHUNK_SIZE];
+                    let mut filled = 0;
+                    while filled < CHUNK_SIZE {
+                        let n = block
+                            .file
+                            .read(chunk.get_mut(filled..).unwrap_or_default())?;
+                        if n == 0 {
+                            break;
+                        }
+                        filled += n;
+                    }
+                    chunk.truncate(filled);
+                    block.hasher.update(&chunk);
+                    if filled < CHUNK_SIZE {
+                        // The end of the file: what left is what the id names, or the
+                        // stream stops before the end marker.
+                        let actual = block.hasher.finalize();
+                        if actual != block.expected {
+                            return Err(Error::BlockIdMismatch {
+                                id: block.id,
+                                actual: hex(&actual),
+                            });
+                        }
+                        if filled == 0 {
+                            continue;
+                        }
+                        return Ok(Some(Buffer {
+                            chunk: Some(chunk),
+                            ..Buffer::default()
+                        }));
+                    }
+                    self.stack.push(Task::Block(block));
+                    return Ok(Some(Buffer {
+                        chunk: Some(chunk),
+                        ..Buffer::default()
+                    }));
                 }
                 Task::File(mut file) => {
                     let mut chunk = vec![0u8; CHUNK_SIZE];
