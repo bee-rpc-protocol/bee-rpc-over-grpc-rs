@@ -1,6 +1,6 @@
 # Deviations from the reference
 
-The Python library (bee-rpc-over-grpc-py v0.0.2) is the reference. This crate does
+The Python library (bee-rpc-over-grpc-py v0.0.3) is the reference. This crate does
 the same on the wire, with the differences below. Each one is on purpose and has a
 test. Do not add a deviation without approval of a maintainer.
 

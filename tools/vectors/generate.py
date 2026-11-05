@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the test vectors of the Rust port from the Python reference.
 
-The Python library (bee-rpc-over-grpc-py, tag v0.0.2) is the reference. Every
+The Python library (bee-rpc-over-grpc-py, tag v0.0.3) is the reference. Every
 expectation in crates/bee-rpc/tests/vectors/ comes from this script, not from a hand-written
 guess. Do not edit the vectors by hand. Change this script, run it again, and
 commit both.
@@ -11,7 +11,7 @@ Usage (from the repository root):
     python -I tools/vectors/generate.py crates/bee-rpc/tests/vectors
 
 Requirements: Python 3.11, grpcio==1.56.0, protobuf==7.36.2 and
-bee-rpc-over-grpc-py at tag v0.0.2 (see tools/vectors/requirements.txt).
+bee-rpc-over-grpc-py at tag v0.0.3 (see tools/vectors/requirements.txt).
 
 Output:
 
@@ -41,7 +41,7 @@ from bee_rpc.utils import (
     resolve_hash_types, HashTypeError,
 )
 
-REFERENCE = 'bee-rpc-over-grpc-py v0.0.2'
+REFERENCE = 'bee-rpc-over-grpc-py v0.0.3'
 OUT = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else 'crates/bee-rpc/tests/vectors')
 HEX_LIMIT = 4096  # bytes; longer data is given as length + sha256 only
 
@@ -506,6 +506,10 @@ try:
               'Skip the inner leaf block only.')
     skip_case('nested_parent', nested_stream, nested_buffers, [inner_id], 0,
               'Skip the parent: its children markers are dropped too, its end marker is kept.')
+    skip_case('nested_parent_mid_child', nested_stream, nested_buffers, [inner_id], 5,
+              'The request for the parent arrives when its child is open (the child start '
+              'marker is out). The child end marker is kept, so the receiver can close it '
+              'before the end marker of the parent. Python v0.0.3.')
 
     sid = hashlib.sha3_256(b'held').hexdigest()
     sb = skip_buffer(sid)
