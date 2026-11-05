@@ -6,7 +6,7 @@
 //! content-addressed parts, framed by a start marker and an end marker with the
 //! same hash, that a receiver can skip when it already holds them.
 //!
-//! The reference is the Python library at v0.0.2. The test vectors hold the
+//! The reference is the Python library at v0.0.3. The test vectors hold the
 //! expectations, generated from it by `tools/vectors/generate.py`.
 //! `DEVIATIONS.md` lists the places where this crate is stricter on purpose.
 //!

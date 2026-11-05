@@ -370,7 +370,7 @@
    "pointer": "0a221220c4d3a9d07d040ad526e2ed6e06b5da922e7243a216fa89a8118e48250de05dee"
   }
  ],
- "reference": "bee-rpc-over-grpc-py v0.0.2",
+ "reference": "bee-rpc-over-grpc-py v0.0.3",
  "resolve": [
   {
    "block_id": "0101010101010101010101010101010101010101010101010101010101010101",
@@ -748,6 +748,17 @@
    "output": "skip_nested_parent.bee",
    "output_buffers": 9,
    "request_after": 0,
+   "skip_ids": [
+    "015e494b2ba76a5c64faca135eec81f1372ff5efbecf2eb2409a12d28f1556a5"
+   ]
+  },
+  {
+   "input": "parse_nested_depth2.bee",
+   "name": "nested_parent_mid_child",
+   "note": "The request for the parent arrives when its child is open (the child start marker is out). The child end marker is kept, so the receiver can close it before the end marker of the parent. Python v0.0.3.",
+   "output": "skip_nested_parent_mid_child.bee",
+   "output_buffers": 12,
+   "request_after": 5,
    "skip_ids": [
     "015e494b2ba76a5c64faca135eec81f1372ff5efbecf2eb2409a12d28f1556a5"
    ]

@@ -7,9 +7,14 @@
 //! # Sender filter rules ([`SkipFilter`], must match the vectors)
 //!
 //! - The skip set is checked again for each Buffer, not once per block.
-//! - The end marker of a block is always emitted, exactly once, also when the
-//!   block is skipped.
-//! - A skipped block drops its children: their start and end markers too.
+//! - The end marker of a block is emitted if and only if its start marker was
+//!   emitted. So it is emitted exactly once, also when the block is skipped.
+//! - A skipped block drops the children that start after the skip began: their
+//!   start and end markers too.
+//! - A child that was open when the skip request for its parent arrived has its
+//!   start marker out. Its end marker is emitted, with no chunks before it. The
+//!   receiver has it on its stack of open blocks, and the end marker of the
+//!   parent while the child is open is an `IntersectionError`.
 //! - When a parent is skipped while a child is open, the shallowest skipped open
 //!   block wins.
 //! - Start markers that come before the skip request are emitted.
@@ -173,6 +178,8 @@ pub struct SkipFilter {
     /// The ids of the open blocks, outermost first. `None` for a marker with no
     /// hash in the algorithm of the control.
     stack: Vec<Option<Vec<u8>>>,
+    /// For each block of `stack`: its start marker was emitted.
+    opened: Vec<bool>,
     /// The 1-based depth in `stack` of the block that is being skipped.
     skipping_at: Option<usize>,
 }
@@ -183,6 +190,7 @@ impl SkipFilter {
         SkipFilter {
             control,
             stack: Vec::new(),
+            opened: Vec::new(),
             skipping_at: None,
         }
     }
@@ -203,21 +211,21 @@ impl SkipFilter {
                 // The end marker of the innermost open block.
                 let depth = self.stack.len();
                 self.stack.pop();
-                return match self.skipping_at {
-                    None => Some(buffer),
-                    Some(at) if at == depth => {
-                        self.skipping_at = None;
-                        Some(buffer)
-                    }
-                    // Inside a shallower skipped block: dropped with it.
-                    Some(_) => None,
-                };
+                let was_opened = self.opened.pop().unwrap_or(false);
+                if self.skipping_at == Some(depth) {
+                    self.skipping_at = None;
+                }
+                // The receiver waits for the end of every block it saw start. A
+                // block that started inside a skipped block was dropped with it.
+                return if was_opened { Some(buffer) } else { None };
             }
             // A start marker.
             self.stack.push(id);
             if self.skipping_at.is_some() {
+                self.opened.push(false);
                 return None;
             }
+            self.opened.push(true);
             self.skipping_at = self.outermost_skipped();
             return Some(buffer);
         }

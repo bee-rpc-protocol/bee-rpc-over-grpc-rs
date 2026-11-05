@@ -51,7 +51,7 @@ reference makes from them (`store` in `manifest.json`), and the reads that it re
 
 ## Compatibility rule
 
-The Python library at v0.0.2 is the reference. A Rust peer and a Python peer must
+The Python library at v0.0.3 is the reference. A Rust peer and a Python peer must
 talk to each other with no change on either side. `DEVIATIONS.md` lists where the
 Rust parser refuses input that the reference accepts.
 
